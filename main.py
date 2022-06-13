@@ -1,7 +1,31 @@
+import numpy as np
 import sqlite3
 import time
+import io
 
-s = time.time()
+st = time.time()
+
+
+def adapt_array(arr):
+    out = io.BytesIO()
+    np.save(out, arr)
+    out.seek(0)
+    return sqlite3.Binary(out.read())
+
+
+def convert_array(text):
+    out = io.BytesIO(text)
+    out.seek(0)
+    return np.load(out, allow_pickle=True)
+
+
+#  When inserting data, the array Convert to text Insert
+sqlite3.register_adapter(np.ndarray, adapt_array)
+
+#  When querying data, the text Convert to array
+sqlite3.register_converter("array", convert_array)
+
+
 batch = [
     "My name is Aksh,",
     "Lorem Ipsum is simply dummy text of the printing and typesetting industry.",
@@ -16,81 +40,69 @@ batch = [
 
 
 def convert_to_numbers(data):
-    batch_token_list = [text.split() for text in data]
-    return [[[ord(char) for char in token] for token in token_list] for token_list in batch_token_list]
-
-
-def convert_to_string(data):
-    char_list = [[chr(n) for n in num_list] for num_list in data]
-    words_list = ["".join(items) for items in char_list]
-    return " ".join(words_list)
+    text_list = [t for t in data]
+    batch_token_list = [t.split() for t in data]
+    num_list = [[[ord(char) for char in token] for token in token_list] for token_list in batch_token_list]
+    num_array_list = [np.array([items], dtype=object) for items in num_list]
+    sum_array_list = [np.array([sum(single_word) for single_word in sentence], dtype=object) for sentence in num_list]
+    return text_list, num_array_list, sum_array_list
 
 
 def search(data):
-    search_list = convert_to_numbers([data])
-    converted_data = []
-    for items in search_list:
-        converted_data.append(str(items))
+    search_text, search_numbers, search_sum = convert_to_numbers([data])
     con = sqlite3.connect("vectorized.db")
     c = con.cursor()
-    c.execute("SELECT rowid, * FROM vectors WHERE vector = ?", converted_data)
+    c.execute("SELECT rowid, text FROM vectors WHERE numbers = ?", search_numbers)
     items = c.fetchall()
     for item in items:
-        numbers_list = eval(item[1])
-        string = convert_to_string(numbers_list)
-        print(f"{item[0]}, {string}")
+        print(f"{item[0]}, {item[1]}")
     con.close()
 
 
 def create_table():
-    con = sqlite3.connect("vectorized.db")
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
     c.execute("""CREATE TABLE vectors (
-    vector TEXT
+    text TEXT,
+    numbers array,
+    sum_of_words array
     )""")
     con.commit()
     con.close()
 
 
 def delete_table():
-    con = sqlite3.connect("vectorized.db")
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
     c.execute("DROP TABLE vectors")
     con.commit()
     con.close()
 
 
-def insert(data):
-    con = sqlite3.connect("vectorized.db")
+def insert(t, n, s):
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
-    converted_data = []
-    for items in data:
-        converted_data.append(str(items))
-    c.executemany("INSERT INTO vectors VALUES (?)", zip(converted_data))
+    c.executemany("INSERT INTO vectors VALUES (?,?,?)", zip(t, n, s))
     con.commit()
     con.close()
 
 
 def fetch():
-    con = sqlite3.connect("vectorized.db")
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
-    c.execute("SELECT rowid, * FROM vectors")
+    c.execute("SELECT rowid, text FROM vectors")
     items = c.fetchall()
-    for item in items:
-        numbers_list = eval(item[1])
-        string = convert_to_string(numbers_list)
-        print(string)
-
+    print(items)
     con.close()
 
 
 delete_table()
 create_table()
-num = convert_to_numbers(batch)
-insert(num)
+text, num, sum_ = convert_to_numbers(batch)
+insert(text, num, sum_)
 # fetch()
 search("My name is Aksh.")
 
 f = time.time()
-print(f"total time: {f - s}")
+print(f"total time: {f - st}")
 
