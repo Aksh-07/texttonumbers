@@ -2,8 +2,10 @@ import numpy as np
 import sqlite3
 import time
 import io
+import concurrent.futures
+from threading import Semaphore
 
-st = time.time()
+lock = Semaphore(10)
 
 
 def adapt_array(arr):
@@ -13,8 +15,8 @@ def adapt_array(arr):
     return sqlite3.Binary(out.read())
 
 
-def convert_array(text):
-    out = io.BytesIO(text)
+def convert_array(text_):
+    out = io.BytesIO(text_)
     out.seek(0)
     return np.load(out, allow_pickle=True)
 
@@ -40,23 +42,27 @@ batch = [
 
 
 def convert_to_numbers(data):
-    text_list = [t for t in data]
     batch_token_list = [t.split() for t in data]
     num_list = [[[ord(char) for char in token] for token in token_list] for token_list in batch_token_list]
     num_array_list = [np.array([items], dtype=object) for items in num_list]
     sum_array_list = [np.array([sum(single_word) for single_word in sentence], dtype=object) for sentence in num_list]
-    return text_list, num_array_list, sum_array_list
+    return data, num_array_list, sum_array_list
 
 
-def search(data):
+def search(data, r):
     search_text, search_numbers, search_sum = convert_to_numbers([data])
-    con = sqlite3.connect("vectorized.db")
+    for item in search_numbers:
+        sn = item
+
+    lock.acquire()
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
-    c.execute("SELECT rowid, text FROM vectors WHERE numbers = ?", search_numbers)
+    c.execute("SELECT rowid, text FROM vectors WHERE numbers = ? and rowid BETWEEN ? and ?", (sn, r[0], r[1]))
     items = c.fetchall()
     for item in items:
         print(f"{item[0]}, {item[1]}")
     con.close()
+    lock.release()
 
 
 def create_table():
@@ -90,19 +96,44 @@ def insert(t, n, s):
 def fetch():
     con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
     c = con.cursor()
-    c.execute("SELECT rowid, text FROM vectors")
+    c.execute("SELECT rowid, text numbers FROM vectors")
     items = c.fetchall()
     print(items)
     con.close()
 
 
-delete_table()
-create_table()
-text, num, sum_ = convert_to_numbers(batch)
-insert(text, num, sum_)
-# fetch()
-search("My name is Aksh.")
+def threaded_search(search_text):
+    con = sqlite3.connect("vectorized.db", detect_types=sqlite3.PARSE_DECLTYPES)
+    c = con.cursor()
+    c.execute("SELECT COUNT(*) FROM vectors")
+    total_rows = c.fetchone()[0]
+    con.close()
+    tp_list = [
+               [0, int(total_rows/10)],
+               [int(total_rows/10) + 1, int(2*total_rows/10)],
+               [int(2 * total_rows / 10) + 1, int(3 * total_rows / 10)],
+               [int(3 * total_rows / 10) + 1, int(4 * total_rows / 10)],
+               [int(4 * total_rows / 10) + 1, int(5 * total_rows / 10)],
+               [int(5 * total_rows / 10) + 1, int(6 * total_rows / 10)],
+               [int(6 * total_rows / 10) + 1, int(7 * total_rows / 10)],
+               [int(7 * total_rows / 10) + 1, int(8 * total_rows / 10)],
+               [int(8 * total_rows / 10) + 1, int(9 * total_rows / 10)],
+               [int(9 * total_rows / 10) + 1, total_rows]
+               ]
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(search, search_text, tp) for tp in tp_list]
 
+
+st = time.time()
+
+# delete_table()
+# create_table()
+# text, num, sum_ = convert_to_numbers(batch)
+# insert(text, num, sum_)
+# fetch()
+# search("My name is Aksh.", [1, 328])
+threaded_search("My name is Aksh.")
 f = time.time()
+
 print(f"total time: {f - st}")
 
